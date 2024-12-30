@@ -23,8 +23,8 @@ typedef struct {
     char name[GROUP_NAME_LENGTH];
     SOCKET members[MAX_CLIENTS];
     int memberCount;
-    int maxIndex;
     int admin;
+    int exist;
 } GroupChat;
 
 GroupChat groups[MAX_GROUPS];
@@ -34,34 +34,28 @@ int addClientToGroup(GroupChat* group, SOCKET client) {
     
     if (group->memberCount < MAX_CLIENTS) { // 그룹에서 수용할 수 있는 멤버 수 이내일 시
 
-        for (int i = 0; i < group->maxIndex; i++) { // 그룹에 이미 존재하는 멤버일 시 아무것도 하지 않는다.
+        for (int i = 0; i < group->memberCount; i++) { // 그룹에 이미 존재하는 멤버인지 체크하고 이미 존재하는 멤버라면 1을 리턴
             if (group->members[i] == client)
                 return 1;
         }
 
-        for (int i = 0; i <= group->maxIndex; i++) { // 정상적으로 작동할 시
+        for (int i = 0; i < MAX_CLIENTS; i++) { // 정상적으로 작동할 시 멤버를 배열에 추가하고 2를 리턴
             if (group->members[i] == 0) {
                 group->members[i] = client;
                 group->memberCount++;
-           
-                if (group->memberCount > group->maxIndex) { 
-                    group->maxIndex = group->memberCount; // maxIndex까지만 반복문을 수행하여 반복을 최소화하여 성능을 향상시키기 위해 maxIndex 변수를 설정함 -> memberCount(멤버수)까지만 반복을 수행하도록 하기 위함 
-                }
-                return 2;
-            }
 
+                return 2;
+            } 
         }
 
-    }
-    else // 그룹에서 수용할 수 있는 멤버 수를 초과했을 시;
-    {
+    } else { // 그룹에서 수용할 수 있는 멤버 수를 초과했을 시 3을 리턴;
         return 3;
     }
 }
 
 int deleteClientToGroup(GroupChat* group, SOCKET client) {
     if (group->admin != client) { // 해당 클라이언트가 이 그룹의 관리자가 아닐 때만 그룹을 나갈 수 있음
-        for (int i = 0; i < group->maxIndex; i++) { // 그룹에서 해당 클라이언트가 있는지 조회하고 있으면 삭제
+        for (int i = 0; i < group->memberCount; i++) { // 그룹에서 해당 클라이언트가 있는지 조회하고 있으면 삭제
             if (group->members[i] == client) {
                 group->members[i] = 0;
                 group->memberCount--;
@@ -92,9 +86,19 @@ GroupChat* findGroupByName(const char* name) {
     return NULL;
 }
 
-int deleteGroupByName(GroupChat* group) {
+int deleteGroupByName(GroupChat* group, SOCKET client) {
+    char message[BUFFER_SIZE];
+    sprintf(message, "Group '%s' is Deleted", group->name);
+
     if (group) { // 해당하는 그룹이 존재할 때
+        for (int i = 0; i < group->memberCount; i++) {
+            if (group->members[i] != client) {
+                send(group->members[i], message, strlen (message), 0);
+            }
+        }
+
         memset(group, 0, sizeof(group)); // 해당 그룹을 삭제함
+        groupCount--;
         return 1;
     }
     else {
@@ -116,19 +120,28 @@ void handleClientCommand(SOCKET client, const char* command) {
         else {
             strcpy(groups[groupCount].name, groupName); // 그룹을 생성하는 코드
 
-            groups[groupCount].memberCount = 0;       // 
-            groups[groupCount].maxIndex = 0;          //
-            for (int i = 0; i < MAX_CLIENTS; i++) {   // 그룹을 초기화하는 코드
-                groups[groupCount].members[i] = 0;    //
-            }                                         //
-            groups[groupCount].admin = client; // 그룹을 생성한 클라이언트를 관리자로 설정함.
+            for (int i = 0; i < MAX_GROUPS; i++) {
+                if (groups[i].exist == 0) {
+                    groups[i].exist = 1;
+                    groups[i].admin = client;
+                    groupCount++;
+                    int result = addClientToGroup(&groups[i], client);
 
-            int result = addClientToGroup(&groups[groupCount], client); // 처음으로 그룹을 생성한 클라이언트를 그룹에 추가하는 코드
-            groupCount++;  
+                    if (result == 2) { // result 값이 2 일 때는 정상 동작 했다는 뜻
+                        sprintf(response, "Group '%s' created and joined admin '%d'.\n", groupName, groups[i].admin);
+                    }
+                    break;
+                }
+            }
+            //groups[groupCount].memberCount = 0;       // 
+            //groups[groupCount].maxIndex = 0;          //
+            //for (int i = 0; i < MAX_CLIENTS; i++) {   // 그룹을 초기화하는 코드
+            //    groups[groupCount].members[i] = 0;    //
+            //}                                         //
+            //groups[groupCount].admin = client; // 그룹을 생성한 클라이언트를 관리자로 설정함.
 
-            if (result == 2) { // result 값이 2 일 때는 정상 동작 했다는 뜻
-                sprintf(response, "Group '%s' created and joined.\n", groupName);
-            } 
+            //int result = addClientToGroup(&groups[groupCount], client); // 처음으로 그룹을 생성한 클라이언트를 그룹에 추가하는 코드  
+
         }
         send(client, response, strlen(response), 0); // 클라이언트에게 결과 전송
     }
@@ -141,8 +154,7 @@ void handleClientCommand(SOCKET client, const char* command) {
                 sprintf(response, "Client '%d' already exists in Group '%s'.\n", client, groupName);
             } else if (result == 2) { // 정상적으로 그룹에 조인
                 sprintf(response, "Joined group '%s'.\n", groupName);
-            } else // 그룹의 수용인원이 만석일 때
-            {
+            } else { // 그룹의 수용인원이 만석일 때 
                 sprintf(response, "Group '%s' is fulled.\n", groupName);
             }
         }
@@ -173,7 +185,7 @@ void handleClientCommand(SOCKET client, const char* command) {
     }
     else if (sscanf(command, "DELETE %s", groupName) == 1) {
         GroupChat* group = findGroupByName(groupName);
-        int result = deleteGroupByName(group);
+        int result = deleteGroupByName(group, client);
         if (result == 1) {
             sprintf(response, "Group '%s' delete success.\n", groupName);
         } else if (result == 2) {
@@ -188,6 +200,10 @@ void handleClientCommand(SOCKET client, const char* command) {
 }
 
 int main() {
+
+    for (int i = 0; i < MAX_GROUPS; i++) {
+        memset(&groups[i], 0, sizeof(GroupChat));
+    }
 
     WSADATA wsaData;
 
